@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.special import softmax
-
+from torch.nn import CosineSimilarity
 from scipy.stats import spearmanr
 
 from torch.nn import CrossEntropyLoss
@@ -94,11 +94,17 @@ def predict(
                 metrics[f'eval_{key}_loss'] += value.mean().item()
 
         nb_eval_steps += 1
-        syns_preds.append(syn_logits.detach().cpu().numpy())
+        if model.local_config['loss'] != 'cosine_similarity':
+            syns_preds.append(syn_logits.detach().cpu().numpy())
+        else:
+            syns_preds.append(CosineSimilarity()(syn_logits[0], syn_logits[1]).detach().cpu().numpy())
 
     syns_scores = np.concatenate(syns_preds, axis=0)  # n_examples x 2 or n_examples
-    if syns_scores.shape[-1] != 1:
+    if syns_scores.shape[-1] != 1 and model.local_config['loss'] != 'cosine_similarity':
         syns_preds = np.argmax(syns_scores, axis=1)  # n_examples
+    elif model.local_config['loss'] == 'cosine_similarity':
+        syns_preds = np.zeros(syns_scores.shape, dtype=int)
+        syns_preds[syns_scores >= 0.5] = 1
     else:
         syns_preds = np.zeros(syns_scores.shape, dtype=int)
         if model.local_config['train_scd']:
@@ -122,7 +128,9 @@ def predict(
         predictions[docId][posInDoc].append(syn_pred)
         golds[docId][posInDoc].append(example.label)
         # scores for positive class
-        if len(ex_scores) > 1:
+        if isinstance(ex_scores, np.float32):
+            scores[docId][posInDoc].append(ex_scores)
+        elif len(ex_scores) > 1:
             scores[docId][posInDoc].append(softmax(ex_scores)[-1])
         else:
             scores[docId][posInDoc].append(ex_scores[0])
@@ -641,7 +649,7 @@ if __name__ == "__main__":
     parser.add_argument("--log_train_metrics", action="store_true",
                         help="compute metrics for train set too")
     parser.add_argument("--loss", type=str, default='crossentropy_loss',
-                        choices=['crossentropy_loss', 'mse_loss'])
+                        choices=['crossentropy_loss', 'mse_loss', 'cosine_similarity'])
     parser.add_argument("--lr_scheduler", type=str, default='constant_warmup',
                         choices=['constant_warmup', 'linear_warmup'])
     parser.add_argument("--model_name", type=str, default='xlm-roberta-large',

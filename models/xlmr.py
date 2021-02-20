@@ -2,7 +2,7 @@ from transformers import RobertaModel, XLMRobertaConfig
 from transformers import BertPreTrainedModel
 from transformers import XLMRobertaTokenizer
 from torch import nn
-from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, MSELoss
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, MSELoss, CosineEmbeddingLoss
 import torch
 from collections import defaultdict
 
@@ -38,6 +38,27 @@ class RobertaClassificationHead(nn.Module):
         x = self.out_proj(x)
         return x
 
+class RobertaClassificationCosineHead(nn.Module):
+    def __init__(self, config, num_classes, input_size, emb_size=1024):
+        super().__init__()
+        self.emb_size = emb_size
+        #self.bert = BertModel(config)
+        self.emb_fs = nn.Linear(768, emb_size)
+        self.emb_sc = nn.Linear(768, emb_size)
+        self.activation = nn.Tanh()
+        self.cos_fn = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+        #self.apply(self.init_bert_weights)
+
+    def calcSim(self, emb1, emb2):
+        return self.cos_fn(emb1, emb2)
+        
+    def forward(self, features, **kwargs):
+        emb1 = features[:, :768]
+        emb2 = features[:, 768:2*768]
+        emb1 = self.activation(self.emb_fs(emb1))
+        emb2 = self.activation(self.emb_sc(emb2))
+        return (emb1, emb2)
+
 
 class WiCFeature2:
     def __init__(self, input_ids, input_mask, token_type_ids, syn_label, positions, example):
@@ -71,6 +92,8 @@ class XLMRModel(BertPreTrainedModel):
             self.syn_mse_clf = RobertaClassificationHead(config, 1, input_size)
         elif self.local_config['loss'] == 'crossentropy_loss':
             self.syn_clf = RobertaClassificationHead(config, 2, input_size)
+        elif self.local_config['loss'] == 'cosine_similarity':
+            self.syn_clf = RobertaClassificationCosineHead(config, 2, input_size)
         self.data_processor = data_processor
         self.init_weights()
 
@@ -104,11 +127,16 @@ class XLMRModel(BertPreTrainedModel):
         syn_logits = clf(syn_features)  # bs x 2 or bs
 
         if input_labels is not None:
-            y_size = syn_logits.size(-1)
+            if self.local_config['loss'] != 'cosine_similarity':
+                y_size = syn_logits.size(-1)
+            else:
+                y_size = -1
             if y_size == 1:
                 loss['total'] = MSELoss()(syn_logits, syn_labels.unsqueeze(-1).float())
-            else:
+            elif self.local_config['loss'] == 'crossentropy_loss':
                 loss['total'] = CrossEntropyLoss()(syn_logits, syn_labels)
+            else:
+                loss['total'] = CosineEmbeddingLoss()(syn_logits[0], syn_logits[1], syn_labels * 2 - 1)
 
         return (loss, syn_logits)
 

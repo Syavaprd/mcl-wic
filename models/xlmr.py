@@ -39,24 +39,26 @@ class RobertaClassificationHead(nn.Module):
         return x
 
 class RobertaClassificationCosineHead(nn.Module):
-    def __init__(self, config, num_classes, input_size, emb_size=1024):
+    def __init__(self, config, num_classes, input_size, local_config):
         super().__init__()
-        self.emb_size = emb_size
-        #self.bert = BertModel(config)
-        self.emb_fs = nn.Linear(768, emb_size)
-        self.emb_sc = nn.Linear(768, emb_size)
+        self.emb_size = local_config['emb_size_for_cosine']
+        self.input_size=input_size
+        print(f"INPUT_SIZE======{self.input_size}")
+        self.emb_fs = nn.Linear(int(input_size // 2), self.emb_size)
+        self.emb_sc = nn.Linear(int(input_size // 2), self.emb_size)
         self.activation = nn.Tanh()
+        self.local_config = local_config
         self.cos_fn = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-        #self.apply(self.init_bert_weights)
 
     def calcSim(self, emb1, emb2):
         return self.cos_fn(emb1, emb2)
         
     def forward(self, features, **kwargs):
-        emb1 = features[:, :768]
-        emb2 = features[:, 768:2*768]
-        emb1 = self.activation(self.emb_fs(emb1))
-        emb2 = self.activation(self.emb_sc(emb2))
+        emb1 = features[:, :int(self.input_size // 2)]
+        emb2 = features[:, int(self.input_size // 2):self.input_size]
+        if self.local_config['add_fc_layer'] == "True":
+            emb1 = self.activation(self.emb_fs(emb1))
+            emb2 = self.activation(self.emb_sc(emb2))
         return (emb1, emb2)
 
 
@@ -93,7 +95,7 @@ class XLMRModel(BertPreTrainedModel):
         elif self.local_config['loss'] == 'crossentropy_loss':
             self.syn_clf = RobertaClassificationHead(config, 2, input_size)
         elif self.local_config['loss'] == 'cosine_similarity':
-            self.syn_clf = RobertaClassificationCosineHead(config, 2, input_size)
+            self.syn_clf = RobertaClassificationCosineHead(config, 2, input_size, local_config)
         self.data_processor = data_processor
         self.init_weights()
 

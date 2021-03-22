@@ -104,7 +104,7 @@ def predict(
         syns_preds = np.argmax(syns_scores, axis=1)  # n_examples
     elif model.local_config['loss'] == 'cosine_similarity':
         syns_preds = np.zeros(syns_scores.shape, dtype=int)
-        syns_preds[syns_scores >= 0.5] = 1
+        syns_preds[syns_scores >= 0.0] = 1
     else:
         syns_preds = np.zeros(syns_scores.shape, dtype=int)
         if model.local_config['train_scd']:
